@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: answer_weaver_app
+    ports:
+      - "8000:8000" 
+    volumes:
+      - ./src:/app/src # Mount the src directory for development hot-reloading
+    env_file:
+      - .env
+    depends_on:
+      - qdrant
+    command: ["python", "-m", "src.main"]
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_db
+    ports:
+      - "6333:6333"  
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    # Optional: Load Qdrant config from a file if needed
+    # command: ["./qdrant", "--config-path", "/qdrant/config/production.yaml"]
+    # volumes:
+    #   - ./qdrant_config:/qdrant/config # Mount custom config if you have one
+    #   - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+    driver: local
