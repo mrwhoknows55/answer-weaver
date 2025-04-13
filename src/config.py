@@ -3,10 +3,13 @@ from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 class Settings(BaseSettings):
     """Loads configuration settings from environment variables and .env file."""
@@ -28,12 +31,12 @@ class Settings(BaseSettings):
     embedding_model_name: str = Field("all-MiniLM-L6-v2", validation_alias='EMBEDDING_MODEL_NAME')
 
     # Fetching parameters (optional defaults)
-    fetch_limit: int = 100 # Max posts to fetch per run
+    fetch_limit: int = 5 # Max posts to fetch per run
 
     model_config = SettingsConfigDict(
-        env_file='.env',          # Load from .env file
-        env_file_encoding='utf-8', # Specify encoding
-        extra='ignore'            # Ignore extra fields found in the environment
+        env_file='.env',         
+        env_file_encoding='utf-8',
+        extra='ignore'           
     )
 
 # Instantiate settings once to be imported by other modules

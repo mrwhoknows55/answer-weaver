@@ -1,7 +1,7 @@
 import logging
 import sys
 from src.data_source.reddit import fetch_subreddit_posts
-from src.db.qdrant import initialize_qdrant_collection, upsert_posts_to_qdrant
+from src.db.qdrant import initialize_qdrant_collection, upsert_posts_to_qdrant, read_posts_from_qdrant
 from src.config import settings
 from fastapi import FastAPI
 
@@ -58,3 +58,6 @@ if __name__ == "__main__":
     # For example, check if QDRANT_URL is reachable? (could add a simple ping/health check)
 
     run_pipeline()
+    initialize_qdrant_collection()
+    logger.info(f"Fetching posts from r/{settings.target_subreddit} (limit: {settings.fetch_limit})...")
+    read_posts_from_qdrant()

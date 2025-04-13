@@ -36,7 +36,7 @@ def get_comments_text(submission: praw.models.Submission, max_comments: int = 20
 
     return "\n---\n".join(comments_text) # Separate comments clearly
 
-def fetch_subreddit_posts(subreddit_name: str, limit: int = 10) -> List[Dict[str, str]]:
+def fetch_subreddit_posts(subreddit_name: str, limit: int = 5) -> List[Dict[str, str]]:
     """
     Fetches top posts and their comments from a given subreddit.
     """
@@ -68,11 +68,9 @@ def fetch_subreddit_posts(subreddit_name: str, limit: int = 10) -> List[Dict[str
     return posts_data
 
 if __name__ == '__main__':
-    # Example usage when running this script directly (for testing)
     logger.info("Running reddit (fetcher) directly for testing...")
     try:
-        # Need to ensure settings are loaded, which requires config to run
-        from src.config import settings # Re-import for direct execution context might be tricky
+        from src.config import settings
         fetched_posts = fetch_subreddit_posts(settings.target_subreddit, limit=5)
         if fetched_posts:
             logger.info(f"Fetched {len(fetched_posts)} posts. Example post:")

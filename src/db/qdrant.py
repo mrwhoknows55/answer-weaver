@@ -1,7 +1,8 @@
-import logging
 from typing import List, Dict, Optional
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import Distance, VectorParams, PointStruct, CollectionStatus, UpdateStatus
+from sentence_transformers import SentenceTransformer
+import uuid
 
 from ..config import settings, logger
 
@@ -66,81 +67,99 @@ def initialize_qdrant_collection():
         logger.exception(f"Failed to initialize or verify Qdrant collection '{collection_name}'.")
         raise
 
-def upsert_posts_to_qdrant(posts: List[Dict[str, str]], batch_size: int = 64):
+def upsert_posts_to_qdrant(posts: List[Dict[str, str]]):
     """
-    Upserts Reddit posts into the Qdrant collection using fastembed for embeddings.
+    Upserts (inserts or updates) Reddit posts into the Qdrant collection,
+    generating embeddings for the combined text.
     """
+    client = get_qdrant_client()
+    collection_name = settings.qdrant_collection_name
+    embedding_model_name = settings.embedding_model_name
+    # Define a consistent namespace for generating UUIDs from Reddit IDs
+    REDDIT_ID_NAMESPACE = uuid.NAMESPACE_URL # Or define your own custom namespace UUID
+
+    logger.info(f"Starting upsert of {len(posts)} posts to collection '{collection_name}' using model '{embedding_model_name}'...")
+
     if not posts:
         logger.warning("No posts provided to upsert.")
         return
 
-    client = get_qdrant_client()
-    collection_name = settings.qdrant_collection_name
-    embedding_model = settings.embedding_model_name # This tells fastembed which model to use implicitly
-
-    logger.info(f"Starting upsert of {len(posts)} posts to collection '{collection_name}' using model '{embedding_model}'...")
-
-    points_to_upsert = []
-    documents_to_embed = []
-    ids_to_upsert = []
-
-    for post in posts:
-        # Qdrant requires integer IDs for HNSW index if not using UUIDs
-        # Reddit IDs are strings (base36), we need a stable mapping to int or use UUIDs
-        # For simplicity here, we'll try hashing the ID, but UUIDs are generally safer
-        # Alternatively, configure Qdrant to accept string IDs if using a different index or Qdrant version supports it
-        # Let's use the string ID directly for now, relying on Qdrant >= 1.7 supporting string IDs
-        post_id = post['id']
-        ids_to_upsert.append(post_id)
-
-        # The text that will be embedded by fastembed
-        documents_to_embed.append(post['combined_text'])
-
-        # Prepare payload (metadata) - exclude the text that's being embedded
-        payload = {
-            "title": post['title'],
-            "url": post['url'],
-            "content": post['content'], # Store original post content separately if needed
-            "comments": post['comments'] # Store comments separately if needed
-            # Add any other relevant metadata, e.g., creation time, score
-        }
-        points_to_upsert.append(models.PointStruct(id=post_id, vector=[0.0]*384, payload=payload)) # Temporary vector, will be replaced
-
     try:
-        # Upsert using client.add which leverages fastembed
-        # Note: client.add automatically handles batching internally if needed,
-        # but explicitly batching the call might offer finer control or fit specific patterns.
-        # For qdrant-client >= 1.7 with fastembed integration:
-        response = client.add(
+        # 1. Initialize the embedding model
+        logger.info(f"Loading embedding model: {embedding_model_name}")
+        model = SentenceTransformer(embedding_model_name)
+        logger.info("Embedding model loaded.")
+
+        # 2. Prepare data for upsert - Generate UUIDs for IDs
+        logger.info("Generating UUIDs for post IDs...")
+        # Generate UUID5 from the Reddit post ID string for deterministic IDs
+        point_ids = [str(uuid.uuid5(REDDIT_ID_NAMESPACE, post["id"])) for post in posts]
+        documents_to_embed = [post["combined_text"] for post in posts]
+        payloads = [
+            {
+                "reddit_id": post["id"], # Store original reddit ID in payload if needed
+                "title": post["title"],
+                "url": post["url"],
+                "content": post["content"],
+                "comments": post["comments"]
+            }
+            for post in posts
+        ]
+        logger.info("UUIDs generated.")
+
+
+        # 3. Generate embeddings
+        logger.info(f"Generating embeddings for {len(documents_to_embed)} documents...")
+        vectors = model.encode(documents_to_embed, show_progress_bar=True).tolist()
+        logger.info("Embeddings generated.")
+
+        # 4. Create PointStruct objects using UUIDs
+        points = [
+            PointStruct(id=point_id, vector=vec, payload=pld)
+            for point_id, vec, pld in zip(point_ids, vectors, payloads)
+        ]
+        logger.info(f"Prepared {len(points)} PointStruct objects.")
+
+        # 5. Upsert points to Qdrant
+        logger.info(f"Upserting {len(points)} points to collection '{collection_name}'...")
+        response = client.upsert(
             collection_name=collection_name,
-            documents=documents_to_embed,
-            ids=ids_to_upsert,
-            payload=[p.payload for p in points_to_upsert] # Provide payloads separately
-            # `batch_size` within client.add controls internal batching to embedding model
-            # The model `embedding_model` is inferred from the collection or defaults
+            points=points,
+            wait=True # Wait for the operation to complete
         )
 
-        if response.status == UpdateStatus.COMPLETED:
-            logger.info(f"Successfully upserted/updated {len(posts)} points into '{collection_name}'.")
-        else:
-            logger.error(f"Qdrant upsert finished with status: {response.status}. Issues might have occurred.")
+        logger.info(f"Upsert operation status: {response.status}")
+        if response.status != UpdateStatus.COMPLETED:
+             logger.warning(f"Upsert operation did not complete successfully: {response}")
+
+        logger.info("Posts upserted successfully.")
 
     except Exception as e:
         logger.exception(f"An error occurred during upsert to Qdrant collection '{collection_name}'.")
 
-if __name__ == '__main__':
-    # Example usage when running this script directly (for testing)
-    logger.info("Running qdrant (vector_store) directly for testing...")
-    # This part might fail now due to relative import change if run directly
-    # Consider running via `python -m src.data_storage.qdrant` for testing
-    # or temporarily changing import back for direct testing
+def read_posts_from_qdrant():
+    client = get_qdrant_client()
+    collection_name = settings.qdrant_collection_name
+
     try:
-        # Need to ensure settings are loaded, which requires config to run
-        from ..config import settings # Re-import for direct execution context might be tricky
+        points = client.query_points(collection_name=collection_name)
+        logger.info(f"Fetched {points.points.count} points from collection '{collection_name}'.")
+        for point in points.points:
+            title = point.payload.get('title', 'No Title')
+            url = point.payload.get('url', 'No URL')
+            content = point.payload.get('content', 'No Content')
+            comments = point.payload.get('comments', 'No Comments')
+            
+            logger.info(f"Point ID: {point.id}\ntitle: {title}\nurl: {url}\ncontent: {content}\ncomments: {comments}\n{'*'*120}\n")
+        return points.points
+    except Exception as e:
+        logger.exception(f"An error occurred while reading posts from Qdrant collection '{collection_name}'.")
+        raise
+
+if __name__ == '__main__':
+    logger.info("Running qdrant (vector_store) directly for testing...")
+    try:
         initialize_qdrant_collection()
         logger.info("Initialization complete. No data upserted in test mode.")
-        # Example of upserting dummy data (optional)
-        # dummy_posts = [{"id": "test1", "title": "Test Post", "url": "http://example.com", "content": "Test content", "comments": "Test comment", "combined_text": "Test Post Test content Test comment"}]
-        # upsert_posts_to_qdrant(dummy_posts)
     except Exception as e:
         logger.exception(f"Failed to initialize or test Qdrant during direct execution: {e}")
