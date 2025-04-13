@@ -1,0 +1,9 @@
+[project]
+name = "answer-weaver"
+version = "0.1.0"
+description = "A bot that answers FAQs by referencing similar posts that have already been answered"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.115.12",
+]
